@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Environment
+.env
+.env.*
+
+# Audio output
+*.wav
+*.mp3
+*.flac
+*.ogg
+test_output/
+
+# HuggingFace / model cache
+.cache/
+
+# macOS
+.DS_Store
+
+# Docker
+*.tar
