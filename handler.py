@@ -23,7 +23,9 @@ Output schema:
 import base64
 import io
 import os
+import re
 import tempfile
+import unicodedata
 import urllib.request
 
 import runpod
@@ -42,6 +44,29 @@ print(f"[init] Model ready  (sample_rate={model.sr})")
 
 
 # ---------------------------------------------------------------------------
+# Helper: sanitise text for the Chatterbox tokenizer
+# ---------------------------------------------------------------------------
+def _sanitise_text(text: str) -> str:
+    # toJsonString() in n8n double-encodes the string — unwrap it if so
+    # e.g. '"Hello, \"world\""' → 'Hello, "world"'
+    stripped = text.strip()
+    if stripped.startswith('"') and stripped.endswith('"'):
+        try:
+            import json
+            text = json.loads(stripped)
+        except Exception:
+            pass
+
+    # Normalise unicode (e.g. smart quotes → straight quotes)
+    text = unicodedata.normalize("NFKC", text)
+    # Strip non-printable / control characters
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    # Collapse multiple spaces / newlines
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Helper: download a URL to a temp file and return its path
 # ---------------------------------------------------------------------------
 def _fetch_audio_prompt(url: str) -> str:
@@ -52,12 +77,28 @@ def _fetch_audio_prompt(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helper: synthesise a single text segment → AudioSegment
+# ---------------------------------------------------------------------------
+def _synthesise(text: str, prompt_path: str | None, exaggeration: float, cfg_weight: float) -> AudioSegment:
+    wav: torch.Tensor = model.generate(
+        text,
+        audio_prompt_path=prompt_path,
+        exaggeration=exaggeration,
+        cfg_weight=cfg_weight,
+    )
+    buf = io.BytesIO()
+    torchaudio.save(buf, wav, model.sr, format="wav")
+    buf.seek(0)
+    return AudioSegment.from_wav(buf)
+
+
+# ---------------------------------------------------------------------------
 # Handler
 # ---------------------------------------------------------------------------
 def handler(event: dict) -> dict:
     job_input = event.get("input", {})
 
-    text: str = job_input.get("text", "").strip()
+    text: str = _sanitise_text(job_input.get("text", ""))
     if not text:
         return {"error": "input.text is required and must not be empty"}
 
@@ -72,23 +113,35 @@ def handler(event: dict) -> dict:
         if prompt_url:
             prompt_path = _fetch_audio_prompt(prompt_url)
 
-        wav: torch.Tensor = model.generate(
-            text,
-            audio_prompt_path=prompt_path,
-            exaggeration=exaggeration,
-            cfg_weight=cfg_weight,
-        )
+        # Split on [pause:N] markers — e.g. "[pause:4]" inserts 4 s of silence
+        parts = re.split(r"\[pause:(\d+(?:\.\d+)?)\]", text)
+        # parts alternates: [text, duration, text, duration, ..., text]
+
+        combined: AudioSegment | None = None
+        i = 0
+        while i < len(parts):
+            segment_text = parts[i].strip()
+            if segment_text:
+                audio = _synthesise(segment_text, prompt_path, exaggeration, cfg_weight)
+                combined = audio if combined is None else combined + audio
+
+            # If there's a pause duration following this segment, append silence
+            if i + 1 < len(parts):
+                silence_ms = int(float(parts[i + 1]) * 1000)
+                combined = (combined or AudioSegment.empty()) + AudioSegment.silent(duration=silence_ms)
+                i += 2
+            else:
+                i += 1
+
+        if combined is None:
+            return {"error": "No speakable text found after parsing pause markers"}
+
     finally:
         if prompt_path and os.path.exists(prompt_path):
             os.unlink(prompt_path)
 
-    # Convert tensor → WAV bytes → MP3 bytes
-    wav_buf = io.BytesIO()
-    torchaudio.save(wav_buf, wav, model.sr, format="wav")
-    wav_buf.seek(0)
-
     mp3_buf = io.BytesIO()
-    AudioSegment.from_wav(wav_buf).export(mp3_buf, format="mp3", bitrate=mp3_bitrate)
+    combined.export(mp3_buf, format="mp3", bitrate=mp3_bitrate)
     mp3_buf.seek(0)
 
     return {
