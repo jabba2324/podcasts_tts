@@ -1,0 +1,8 @@
+{
+  "input": {
+    "text": "Hello! This is a test of the Chatterbox text-to-speech serverless endpoint.",
+    "exaggeration": 0.5,
+    "cfg_weight": 0.5,
+    "mp3_bitrate": "128k"
+  }
+}

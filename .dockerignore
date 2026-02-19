@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+*.wav
+*.mp3
+*.flac
+test_output/
+.git/
