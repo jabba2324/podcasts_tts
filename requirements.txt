@@ -1,8 +1,8 @@
 runpod>=1.7.0
 chatterbox-tts>=0.1.0
-torch==2.1.0
-torchaudio==2.1.0
-torchvision==0.16.0
+torch==2.6.0
+torchaudio==2.6.0
+torchvision==0.21.0
 pydub>=0.25.0
 peft>=0.9.0
 brotli>=1.0.9
