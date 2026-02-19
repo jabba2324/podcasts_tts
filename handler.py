@@ -77,14 +77,25 @@ def _fetch_audio_prompt(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Helper: synthesise a single text segment → AudioSegment
+# Helper: split text into sentences to prevent accent drift on long inputs
 # ---------------------------------------------------------------------------
-def _synthesise(text: str, prompt_path: str | None, exaggeration: float, cfg_weight: float) -> AudioSegment:
+def _split_sentences(text: str) -> list[str]:
+    # Split on sentence-ending punctuation, keeping the punctuation attached
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Helper: synthesise a single sentence → AudioSegment
+# Keeping generations short ensures the reference audio stays dominant
+# ---------------------------------------------------------------------------
+def _synthesise(text: str, prompt_path: str | None, exaggeration: float, cfg_weight: float, temperature: float) -> AudioSegment:
     wav: torch.Tensor = model.generate(
         text,
         audio_prompt_path=prompt_path,
         exaggeration=exaggeration,
         cfg_weight=cfg_weight,
+        temperature=temperature,
     )
     buf = io.BytesIO()
     torchaudio.save(buf, wav, model.sr, format="wav")
@@ -104,6 +115,7 @@ def handler(event: dict) -> dict:
 
     exaggeration: float = float(job_input.get("exaggeration", 0.5))
     cfg_weight: float = float(job_input.get("cfg_weight", 0.5))
+    temperature: float = float(job_input.get("temperature", 0.8))
     mp3_bitrate: str = job_input.get("mp3_bitrate", "128k")
 
     # Optional voice-clone reference audio
@@ -120,9 +132,8 @@ def handler(event: dict) -> dict:
         combined: AudioSegment | None = None
         i = 0
         while i < len(parts):
-            segment_text = parts[i].strip()
-            if segment_text:
-                audio = _synthesise(segment_text, prompt_path, exaggeration, cfg_weight)
+            for sentence in _split_sentences(parts[i]):
+                audio = _synthesise(sentence, prompt_path, exaggeration, cfg_weight, temperature)
                 combined = audio if combined is None else combined + audio
 
             # If there's a pause duration following this segment, append silence
